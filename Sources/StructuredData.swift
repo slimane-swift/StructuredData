@@ -1,10 +1,41 @@
-@_exported import C7
+// The MIT License (MIT)
+//
+// Copyright (c) 2015 Zewo
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-public enum StructuredDataError: Error {
+@_exported import C7
+@_exported import Reflection
+
+public enum StructuredDataError : Error {
     case incompatibleType
+    case outOfBounds
+    case valueNotFound
+    case notStructuredDataInitializable(Any.Type)
+    case notStructuredDataRepresentable(Any.Type)
+    case notStructuredDataDictionaryKeyInitializable(Any.Type)
+    case notStructuredDataDictionaryKeyRepresentable(Any.Type)
+    case cannotInitialize(type: Any.Type, from: Any.Type)
 }
 
 // MARK: Parser/Serializer Protocols
+
 public protocol StructuredDataParser {
     func parse(_ data: Data) throws -> StructuredData
 }
@@ -19,104 +50,13 @@ public protocol StructuredDataSerializer {
     func serialize(_ structuredData: StructuredData) throws -> Data
 }
 
-// MARK: StructuredDataRepresentable
-extension Optional where Wrapped: StructuredDataRepresentable {
-    public var structuredData: StructuredData {
-        switch self {
-        case .some(let wrapped): return wrapped.structuredData
-        case .none: return .null
-        }
-    }
-}
-
-extension Bool: StructuredDataRepresentable {
-    public var structuredData: StructuredData {
-        return .bool(self)
-    }
-}
-
-extension Double: StructuredDataRepresentable {
-    public var structuredData: StructuredData {
-        return .double(self)
-    }
-}
-
-extension Int: StructuredDataRepresentable {
-    public var structuredData: StructuredData {
-        return .int(self)
-    }
-}
-
-extension String: StructuredDataRepresentable {
-    public var structuredData: StructuredData {
-        return .string(self)
-    }
-}
-
-extension Data: StructuredDataRepresentable {
-    public var structuredData: StructuredData {
-        return .data(self)
-    }
-}
-
-extension Sequence where Iterator.Element: StructuredDataRepresentable {
-    public var structuredDataArray: [StructuredData] {
-        return self.map({$0.structuredData})
-    }
-
-    public var structuredData: StructuredData {
-        return .array(structuredDataArray)
-    }
-}
-
-public protocol StructuredDataDictionaryKeyRepresentable {
-    var structuredDataDictionaryKey: String { get }
-}
-extension String: StructuredDataDictionaryKeyRepresentable {
-    public var structuredDataDictionaryKey: String {
-        return self
-    }
-}
-extension Collection where Iterator.Element == (StructuredDataDictionaryKeyRepresentable, StructuredDataRepresentable) {
-    public var structuredDataDictionary: [String: StructuredData] {
-        var dictionary: [String: StructuredData] = [:]
-
-        for (key, value) in self.map({($0.0.structuredDataDictionaryKey, $0.1.structuredData)}) {
-            dictionary[key] = value
-        }
-
-        return dictionary
-    }
-
-    public var structuredData: StructuredData {
-        return .dictionary(structuredDataDictionary)
-    }
-}
-
 // MARK: Initializers
+
 extension StructuredData {
-    public init(_ value: StructuredDataRepresentable) {
-        self = value.structuredData
-    }
-
-    public init(_ values: [StructuredDataRepresentable]) {
-        self = .array(values.map({$0.structuredData}))
-    }
-
-    public init(_ values: [String: StructuredDataRepresentable]) {
-        var dictionary: [String: StructuredData] = [:]
-
-        for (key, value) in values.map({($0.key, $0.value.structuredData)}) {
-            dictionary[key] = value
-        }
-
-        self = .dictionary(dictionary)
-    }
-
     public init<T: StructuredDataRepresentable>(_ value: T?) {
         self = value?.structuredData ?? .null
     }
-
+    
     public init<T: StructuredDataRepresentable>(_ values: [T]?) {
         if let values = values {
             self = .array(values.map({$0.structuredData}))
@@ -124,7 +64,7 @@ extension StructuredData {
             self = .null
         }
     }
-
+    
     public init<T: StructuredDataRepresentable>(_ values: [T?]?) {
         if let values = values {
             self = .array(values.map({$0?.structuredData ?? .null}))
@@ -132,29 +72,29 @@ extension StructuredData {
             self = .null
         }
     }
-
+    
     public init<T: StructuredDataRepresentable>(_ values: [String: T]?) {
         if let values = values {
             var dictionary: [String: StructuredData] = [:]
-
+            
             for (key, value) in values.map({($0.key, $0.value.structuredData)}) {
                 dictionary[key] = value
             }
-
+            
             self = .dictionary(dictionary)
         } else {
             self = .null
         }
     }
-
+    
     public init<T: StructuredDataRepresentable>(_ values: [String: T?]?) {
         if let values = values {
             var dictionary: [String: StructuredData] = [:]
-
+            
             for (key, value) in values.map({($0.key, $0.value?.structuredData ?? .null)}) {
                 dictionary[key] = value
             }
-
+            
             self = .dictionary(dictionary)
         } else {
             self = .null
@@ -163,201 +103,81 @@ extension StructuredData {
 }
 
 // MARK: Type Inference
+
 extension StructuredData {
     public static func infer<T: StructuredDataRepresentable>(_ value: T?) -> StructuredData {
         return StructuredData(value)
     }
-
+    
     public static func infer<T: StructuredDataRepresentable>(_ values: [T]?) -> StructuredData {
         return StructuredData(values)
     }
-
+    
     public static func infer<T: StructuredDataRepresentable>(_ values: [T?]?) -> StructuredData {
         return StructuredData(values)
     }
-
+    
     public static func infer<T: StructuredDataRepresentable>(_ values: [String: T]?) -> StructuredData {
         return StructuredData(values)
     }
-
+    
     public static func infer<T: StructuredDataRepresentable>(_ values: [String: T?]?) -> StructuredData {
         return StructuredData(values)
-    }
-
-    public static func infer(_ value: Bool) -> StructuredData {
-        return .bool(value)
-    }
-
-    public static func infer(_ value: Double) -> StructuredData {
-        return .double(value)
-    }
-
-    public static func infer(_ value: Int) -> StructuredData {
-        return .int(value)
-    }
-
-    public static func infer(_ value: String) -> StructuredData {
-        return .string(value)
-    }
-
-    public static func infer(_ value: Data) -> StructuredData {
-        return .data(value)
-    }
-
-    public static func infer(_ value: [StructuredData]) -> StructuredData {
-        return .array(value)
-    }
-
-    public static func infer(_ value: [String: StructuredData]) -> StructuredData {
-        return .dictionary(value)
-    }
-}
-
-// MARK: Getters/Setters
-extension StructuredData {
-    public func get<T>() throws -> T {
-        switch self {
-        case .bool(let value as T): return value
-        case .int(let value as T): return value
-        case .double(let value as T): return value
-        case .string(let value as T): return value
-        case .data(let value as T): return value
-        case .array(let value as T): return value
-        case .dictionary(let value as T): return value
-        default: throw StructuredDataError.incompatibleType
-        }
-    }
-
-    public func get<T>(_ index: Int) throws -> T {
-        if let value = self[index] {
-            return try value.get()
-        }
-        throw StructuredDataError.incompatibleType
-    }
-
-    public func get<T>(_ key: String) throws -> T {
-        if let value = self[key] {
-            return try value.get()
-        }
-        throw StructuredDataError.incompatibleType
-    }
-
-    public mutating func set(_ value: StructuredDataRepresentable, at key: String) throws {
-        try set(value.structuredData, at: key)
-    }
-
-    public mutating func set(_ value: StructuredData, at index: Int) throws {
-        switch self {
-        case .array(let array):
-            var array = array
-            if index >= 0 && index < array.count {
-                array[index] = value
-                self = .array(array)
-            }
-        default:
-            throw StructuredDataError.incompatibleType
-        }
-    }
-
-    public mutating func set(_ value: StructuredDataRepresentable, at index: Int) throws {
-        try set(value.structuredData, at: index)
-    }
-
-    public mutating func set(_ value: StructuredData?, at key: String) throws {
-        switch self {
-        case .dictionary(let dictionary):
-            var dictionary = dictionary
-            dictionary[key] = value
-            self = .dictionary(dictionary)
-        default:
-            throw StructuredDataError.incompatibleType
-        }
-    }
-}
-
-// MARK: Subscripts
-extension StructuredData {
-    public subscript(index: Int) -> StructuredData? {
-        get {
-            guard let array = arrayValue, array.indices.contains(index) else {
-                return nil
-            }
-            return array[index]
-        }
-
-        set(structuredData) {
-            switch self {
-            case .array(let array):
-                var array = array
-                if index >= 0 && index < array.count {
-                    array[index] = structuredData ?? .null
-                    self = .array(array)
-                }
-            default: break
-            }
-        }
-    }
-
-    public subscript(key: String) -> StructuredData? {
-        get {
-            return dictionaryValue?[key]
-        }
-        set(structuredData) {
-            switch self {
-            case .dictionary(let dictionary):
-                var dictionary = dictionary
-                dictionary[key] = structuredData
-                self = .dictionary(dictionary)
-            default: break
-            }
-        }
     }
 }
 
 // MARK: is<Type>
+
 extension StructuredData {
+    public var isNull: Bool {
+        if case .null = self {
+            return true
+        }
+        return false
+    }
+    
     public var isBool: Bool {
         if case .bool = self {
             return true
         }
         return false
     }
-
+    
     public var isDouble: Bool {
         if case .double = self {
             return true
         }
         return false
     }
-
+    
     public var isInt: Bool {
         if case .int = self {
             return true
         }
         return false
     }
-
+    
     public var isString: Bool {
         if case .string = self {
             return true
         }
         return false
     }
-
+    
     public var isData: Bool {
         if case .data = self {
             return true
         }
         return false
     }
-
+    
     public var isArray: Bool {
         if case .array = self {
             return true
         }
         return false
     }
-
+    
     public var isDictionary: Bool {
         if case .dictionary = self {
             return true
@@ -366,231 +186,455 @@ extension StructuredData {
     }
 }
 
-// MARK: <type>Value
+// MARK: as<type>?
+
 extension StructuredData {
-    public var boolValue: Bool? {
+    public var asBool: Bool? {
         return try? get()
     }
-
-    public var doubleValue: Double? {
+    
+    public var asDouble: Double? {
         return try? get()
     }
-
-    public var intValue: Int? {
+    
+    public var asInt: Int? {
         return try? get()
     }
-
-    public var stringValue: String? {
+    
+    public var asString: String? {
         return try? get()
     }
-
-    public var dataValue: Data? {
+    
+    public var asData: Data? {
         return try? get()
     }
-
-    public var arrayValue: [StructuredData]? {
+    
+    public var asArray: [StructuredData]? {
         return try? get()
     }
-
-    public var dictionaryValue: [String: StructuredData]? {
+    
+    public var asDictionary: [String: StructuredData]? {
         return try? get()
     }
 }
 
-// MARK: as<type>
+// MARK: try as<type>()
+
 extension StructuredData {
     public func asBool(converting: Bool = false) throws -> Bool {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .bool(let value):
             return value
-
+            
         case .int(let value):
-            switch value {
-            case 0: return false
-            case 1: return true
-            default: throw StructuredDataError.incompatibleType
-            }
-
+            return value != 0
+            
         case .double(let value):
             return value != 0
-
+            
         case .string(let value):
             switch value.lowercased() {
             case "true": return true
             case "false": return false
             default: throw StructuredDataError.incompatibleType
             }
-
+            
         case .data(let value):
             return !value.isEmpty
-
+            
         case .array(let value):
             return !value.isEmpty
-
+            
         case .dictionary(let value):
             return !value.isEmpty
-
+            
         case .null:
             return false
         }
     }
-
+    
     public func asInt(converting: Bool = false) throws -> Int {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .bool(let value):
             return value ? 1 : 0
-
+            
         case .int(let value):
             return value
-
+            
         case .double(let value):
             return Int(value)
-
+            
         case .string(let value):
             if let int = Int(value) {
                 return int
             }
             throw StructuredDataError.incompatibleType
-
+            
         case .null:
             return 0
-
+            
         default:
             throw StructuredDataError.incompatibleType
         }
     }
-
+    
     public func asDouble(converting: Bool = false) throws -> Double {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .bool(let value):
             return value ? 1.0 : 0.0
-
+            
         case .int(let value):
             return Double(value)
-
+            
         case .double(let value):
             return value
-
+            
         case .string(let value):
             if let double = Double(value) {
                 return double
             }
             throw StructuredDataError.incompatibleType
-
+            
         case .null:
             return 0
-
+            
         default:
             throw StructuredDataError.incompatibleType
         }
     }
-
+    
     public func asString(converting: Bool = false) throws -> String {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .bool(let value):
             return String(value)
-
+            
         case .int(let value):
             return String(value)
-
+            
         case .double(let value):
             return String(value)
-
+            
         case .string(let value):
             return value
-
+            
         case .data(let value):
-            return String(value)
-
-        case .array(let value):
-            return String(value)
-
-        case .dictionary(let value):
-            return String(value)
-
+            return String(describing: value)
+            
+        case .array:
+            throw StructuredDataError.incompatibleType
+            
+        case .dictionary:
+            throw StructuredDataError.incompatibleType
+            
         case .null:
             return "null"
         }
     }
-
+    
     public func asData(converting: Bool = false) throws -> Data {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .bool(let value):
             return value ? [0xff] : [0x00]
-
+            
         case .string(let value):
             return Data(value)
-
+            
         case .data(let value):
             return value
-
+            
         case .null:
             return []
-
+            
         default:
             throw StructuredDataError.incompatibleType
         }
     }
-
+    
     public func asArray(converting: Bool = false) throws -> [StructuredData] {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .array(let value):
             return value
-
+            
         case .null:
             return []
-
+            
         default:
             throw StructuredDataError.incompatibleType
         }
     }
-
+    
     public func asDictionary(converting: Bool = false) throws -> [String: StructuredData] {
         guard converting else {
             return try get()
         }
-
+        
         switch self {
         case .dictionary(let value):
             return value
-
+            
         case .null:
             return [:]
-
+            
         default:
             throw StructuredDataError.incompatibleType
         }
     }
 }
 
-// MARK: Equatable
-extension StructuredData: Equatable {}
+// MARK: IndexPath
 
-public func ==(lhs: StructuredData, rhs: StructuredData) -> Bool {
+public typealias IndexPath = [IndexPathElement]
+
+extension String {
+    public func indexPath() -> IndexPath {
+        return self.split(separator: ".").map {
+            if let index = Int($0) {
+                return index as IndexPathElement
+            }
+            return $0 as IndexPathElement
+        }
+    }
+}
+
+public enum IndexPathValue {
+    case index(Int)
+    case key(String)
+}
+
+public protocol IndexPathElement {
+    var indexPathValue: IndexPathValue { get }
+}
+
+extension IndexPathElement {
+    var constructEmptyContainer: StructuredData {
+        switch indexPathValue {
+        case .index: return []
+        case .key: return [:]
+        }
+    }
+}
+
+extension Int : IndexPathElement {
+    public var indexPathValue: IndexPathValue {
+        return .index(self)
+    }
+}
+
+extension String : IndexPathElement {
+    public var indexPathValue: IndexPathValue {
+        return .key(self)
+    }
+}
+
+// MARK: Get
+
+extension StructuredData {
+    public func get<T>(at indexPath: IndexPathElement...) throws -> T {
+        if indexPath.isEmpty {
+            switch self {
+            case .bool(let value as T): return value
+            case .int(let value as T): return value
+            case .double(let value as T): return value
+            case .string(let value as T): return value
+            case .data(let value as T): return value
+            case .array(let value as T): return value
+            case .dictionary(let value as T): return value
+            default: throw StructuredDataError.incompatibleType
+            }
+        }
+        return try get(at: indexPath).get()
+    }
+    
+    public func get(at indexPath: IndexPathElement...) throws -> StructuredData {
+        return try get(at: indexPath)
+    }
+    
+    public func get(at indexPath: IndexPath) throws -> StructuredData {
+        var value: StructuredData = self
+        
+        for element in indexPath {
+            switch element.indexPathValue {
+            case .index(let index):
+                let array = try value.asArray()
+                if array.indices.contains(index) {
+                    value = array[index]
+                } else {
+                    throw StructuredDataError.outOfBounds
+                }
+                
+            case .key(let key):
+                let dictionary = try value.asDictionary()
+                if let newValue = dictionary[key] {
+                    value = newValue
+                } else {
+                    throw StructuredDataError.valueNotFound
+                }
+            }
+        }
+        
+        return value
+    }
+}
+
+// MARK: Set
+
+extension StructuredData {
+    public mutating func set<T : StructuredDataRepresentable>(value: T, at indexPath: IndexPathElement...) throws {
+        try set(value: value, at: indexPath)
+    }
+    
+    public mutating func set<T : StructuredDataRepresentable>(value: T, at indexPath: [IndexPathElement]) throws {
+        try set(value: value, merging: true, at: indexPath)
+    }
+    
+    fileprivate mutating func set<T : StructuredDataRepresentable>(value: T, merging: Bool, at indexPath: [IndexPathElement]) throws {
+        var indexPath = indexPath
+        
+        guard let first = indexPath.first else {
+            return self = value.structuredData
+        }
+        
+        indexPath.removeFirst()
+        
+        if indexPath.isEmpty {
+            switch first.indexPathValue {
+            case .index(let index):
+                if case .array(var array) = self {
+                    if !array.indices.contains(index) {
+                        throw StructuredDataError.outOfBounds
+                    }
+                    array[index] = value.structuredData
+                    self = .array(array)
+                } else {
+                    throw StructuredDataError.incompatibleType
+                }
+            case .key(let key):
+                if case .dictionary(var dictionary) = self {
+                    let newValue = value.structuredData
+                    if let existingDictionary = dictionary[key]?.asDictionary,
+                        let newDictionary = newValue.asDictionary,
+                        merging {
+                        var combinedDictionary: [String: StructuredData] = [:]
+                        
+                        for (key, value) in existingDictionary {
+                            combinedDictionary[key] = value
+                        }
+                        
+                        for (key, value) in newDictionary {
+                            combinedDictionary[key] = value
+                        }
+                        
+                        dictionary[key] = .dictionary(combinedDictionary)
+                    } else {
+                        dictionary[key] = newValue
+                    }
+                    self = .dictionary(dictionary)
+                } else {
+                    throw StructuredDataError.incompatibleType
+                }
+            }
+        } else {
+            var next = (try? self.get(at: first)) ?? first.constructEmptyContainer
+            try next.set(value: value, at: indexPath)
+            try self.set(value: next, at: [first])
+        }
+    }
+}
+
+// MARK: Remove
+
+extension StructuredData {
+    public mutating func remove(at indexPath: IndexPathElement...) throws {
+        try self.remove(at: indexPath)
+    }
+    
+    public mutating func remove(at indexPath: [IndexPathElement]) throws {
+        var indexPath = indexPath
+        
+        guard let first = indexPath.first else {
+            return self = .null
+        }
+        
+        indexPath.removeFirst()
+        
+        if indexPath.isEmpty {
+            guard case .dictionary(var dictionary) = self, case .key(let key) = first.indexPathValue else {
+                throw StructuredDataError.incompatibleType
+            }
+            
+            dictionary[key] = nil
+            self = .dictionary(dictionary)
+        } else {
+            guard var next = try? self.get(at: first) else {
+                throw StructuredDataError.valueNotFound
+            }
+            try next.remove(at: indexPath)
+            try self.set(value: next, merging: false, at: [first])
+        }
+    }
+}
+
+// MARK: Subscripts
+
+extension StructuredData {
+    public subscript(indexPath: IndexPathElement...) -> StructuredData? {
+        get {
+            return self[indexPath]
+        }
+        
+        set(value) {
+            self[indexPath] = value
+        }
+    }
+    
+    public subscript(indexPath: [IndexPathElement]) -> StructuredData? {
+        get {
+            return try? self.get(at: indexPath)
+        }
+        
+        set(value) {
+            do {
+                if let value = value {
+                    try self.set(value: value, at: indexPath)
+                } else {
+                    try self.remove(at: indexPath)
+                }
+            } catch {
+                fatalError(String(describing: error))
+            }
+        }
+    }
+}
+
+// MARK: Equatable
+
+extension StructuredData : Equatable {}
+
+public func == (lhs: StructuredData, rhs: StructuredData) -> Bool {
     switch (lhs, rhs) {
     case (.null, .null): return true
     case let (.int(l), .int(r)) where l == r: return true
@@ -605,170 +649,149 @@ public func ==(lhs: StructuredData, rhs: StructuredData) -> Bool {
 }
 
 // MARK: Literal Convertibles
-extension StructuredData: ExpressibleByNilLiteral {
+
+extension StructuredData : ExpressibleByNilLiteral {
     public init(nilLiteral value: Void) {
         self = .null
     }
 }
 
-extension StructuredData: ExpressibleByBooleanLiteral {
+extension StructuredData : ExpressibleByBooleanLiteral {
     public init(booleanLiteral value: BooleanLiteralType) {
         self = .bool(value)
     }
 }
 
-extension StructuredData: ExpressibleByIntegerLiteral {
+extension StructuredData : ExpressibleByIntegerLiteral {
     public init(integerLiteral value: IntegerLiteralType) {
         self = .int(value)
     }
 }
 
-extension StructuredData: ExpressibleByFloatLiteral {
+extension StructuredData : ExpressibleByFloatLiteral {
     public init(floatLiteral value: FloatLiteralType) {
         self = .double(value)
     }
 }
 
-extension StructuredData: ExpressibleByStringLiteral {
+extension StructuredData : ExpressibleByStringLiteral {
     public init(unicodeScalarLiteral value: String) {
         self = .string(value)
     }
-
+    
     public init(extendedGraphemeClusterLiteral value: String) {
         self = .string(value)
     }
-
+    
     public init(stringLiteral value: StringLiteralType) {
         self = .string(value)
     }
 }
 
-extension StructuredData: ExpressibleByStringInterpolation {
+extension StructuredData : ExpressibleByStringInterpolation {
     public init(stringInterpolation strings: StructuredData...) {
-        self = .string(strings.reduce("") { $0 + ($1.stringValue ?? "") })
+        self = .string(strings.reduce("") { $0 + $1.asString! })
     }
-
+    
     public init<T>(stringInterpolationSegment expr: T) {
-        self = .string(String(expr))
+        self = .string(String(describing: expr))
     }
 }
 
-extension StructuredData: ExpressibleByArrayLiteral {
+extension StructuredData : ExpressibleByArrayLiteral {
     public init(arrayLiteral elements: StructuredData...) {
         self = .array(elements)
     }
 }
 
-extension StructuredData: ExpressibleByDictionaryLiteral {
+extension StructuredData : ExpressibleByDictionaryLiteral {
     public init(dictionaryLiteral elements: (String, StructuredData)...) {
         var dictionary = [String: StructuredData](minimumCapacity: elements.count)
-
+        
         for (key, value) in elements {
             dictionary[key] = value
         }
-
+        
         self = .dictionary(dictionary)
     }
 }
 
 // MARK: CustomStringConvertible
-extension StructuredData: CustomStringConvertible {
+
+extension StructuredData : CustomStringConvertible {
     public var description: String {
-        var indentLevel = 0
-
         let escapeMapping: [Character: String] = [
-             "\r": "\\r",
-             "\n": "\\n",
-             "\t": "\\t",
-             "\\": "\\\\",
-             "\"": "\\\"",
-
-             "\u{2028}": "\\u2028",
-             "\u{2029}": "\\u2029",
-
-             "\r\n": "\\r\\n"
+            "\r": "\\r",
+            "\n": "\\n",
+            "\t": "\\t",
+            "\\": "\\\\",
+            "\"": "\\\"",
+            
+            "\u{2028}": "\\u2028",
+            "\u{2029}": "\\u2029",
+            
+            "\r\n": "\\r\\n"
         ]
-
+        
         func escape(_ source: String) -> String {
-            var s = "\""
-
-            for c in source.characters {
-                if let escapedSymbol = escapeMapping[c] {
-                    s.append(escapedSymbol)
+            var string = "\""
+            
+            for character in source.characters {
+                if let escapedSymbol = escapeMapping[character] {
+                    string.append(escapedSymbol)
                 } else {
-                    s.append(c)
+                    string.append(character)
                 }
             }
-
-            s.append("\"")
-
-            return s
+            
+            string.append("\"")
+            return string
         }
-
-        func serialize(_ data: StructuredData) -> String {
+        
+        func serialize(data: StructuredData) -> String {
             switch data {
             case .null: return "null"
-            case .bool(let b): return String(b)
-            case .double(let n): return serialize(number: n)
-            case .int(let n): return n.description
-            case .string(let s): return escape(s)
-            case .data(let d): return escape(d.hexadecimalDescription)
-            case .array(let a): return serialize(array: a)
-            case .dictionary(let o): return serialize(object: o)
+            case .bool(let bool): return String(bool)
+            case .double(let number): return String(number)
+            case .int(let number): return String(number)
+            case .string(let string): return escape(string)
+            case .data(let data): return "0x" + data.hexadecimalString()
+            case .array(let array): return serialize(array: array)
+            case .dictionary(let dictionary): return serialize(dictionary: dictionary)
             }
         }
-
-        func serialize(number: Double) -> String {
-            if number == Double(Int64(number)) {
-                return Int64(number).description
-            } else {
-                return number.description
-            }
-        }
-
+        
         func serialize(array: [StructuredData]) -> String {
-            var s = "["
-            indentLevel += 1
-
-            for i in 0 ..< array.count {
-                s += "\n"
-                s += indent()
-                s += serialize(array[i])
-
-                if i != (array.count - 1) {
-                    s += ","
+            var string = "["
+            
+            for index in 0 ..< array.count {
+                string += serialize(data: array[index])
+                
+                if index != array.count - 1 {
+                    string += ","
                 }
             }
-
-            indentLevel -= 1
-            return s + "\n" + indent() + "]"
+            
+            return string + "]"
         }
-
-        func serialize(object: [String: StructuredData]) -> String {
-            var s = "{"
-            indentLevel += 1
-            var i = 0
-
-            for (key, value) in object {
-                s += "\n"
-                s += indent()
-                s += "\(escape(key)): \(serialize(value))"
-
-                if i != (object.count - 1) {
-                    s += ","
+        
+        func serialize(dictionary: [String: StructuredData]) -> String {
+            var string = "{"
+            var index = 0
+            
+            for (key, value) in dictionary.sorted(by: {$0.0 < $1.0}) {
+                string += escape(key) + ":" + serialize(data: value)
+                
+                if index != dictionary.count - 1 {
+                    string += ","
                 }
-                i += 1
+                
+                index += 1
             }
-
-            indentLevel -= 1
-            return s + "\n" + indent() + "}"
+            
+            return string + "}"
         }
-
-        func indent() -> String {
-            let spaceCount = indentLevel * 4
-            return String(repeating: Character(" "), count: spaceCount)
-        }
-
-        return serialize(self)
+        
+        return serialize(data: self)
     }
 }
